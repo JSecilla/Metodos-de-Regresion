@@ -1,0 +1,1688 @@
+---
+title: "Trabajo Regresión"
+author: "Jesus"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(equatiomatic)
+library(knitr)
+library(tidyverse)
+library(lmtest)
+library(pacman)
+library(qgraph)
+library(gridExtra)
+library(caret)
+library(glmnet)
+p_load(corrplot, ecospat, ggplot2, dplyr, tidyr, sampler, reshape, tidyverse, knitr, psych)
+```
+
+# 1.Introducción
+
+A lo largo de todo el trabajo vamos a aplicar los contenido aprendidos a lo largo de la asignatura Métodos de Regresión impartida por la Dra. Sandra Benitez Peña en la Universidad Carlos III de Madrid, además de ampliar con algunos métodos de selección de variables y de regularización como pueden ser Ridge o Lasso.
+
+Todo el trabajo está realizado sobre un dataset proporcionado por la profesora que contiene datos históricos del mercado de valoración de bienes raíces de Sindian Dist., New Taipei City, Taiwán.
+
+La filosofía del trabajo será presentar primero algunas ideas teóricas para tener una idea general de lo que luego vamos a calcular usando el software R, concretamente con su editor RStudio.
+
+No obstante antes de nada vamos a empezar viendo la forma y la esctructura de los datos con los que vamos a trabajar
+
+
+# 2.Descripción del dataset
+
+Vamos a comenzar describiendo un poco los datos que vamos a utilizar
+
+```{r}
+datos <- read_excel("C:/Users/jsm01/OneDrive/Escritorio/Tercero/Métodos de Regresión/TRABAJO VOLUNTARIO/Real estate valuation data set.xlsx")
+datos <- datos[,-1]
+knitr::kable(head(datos))
+knitr::kable(tail(datos))
+```
+
+```{r}
+skimr::skim(datos)
+```
+
+
+
+Nos encontramos ante un dataset formado por por 414 observaciones de 7 variables:
+
+***VARIABLES EXPLICATIVAS***
+
+- $X_1$ - **Fecha de transacción** : Nos indica el año y el més en el que se realizó cada transacción, están expresados de tal forma que los primeros cuatro números hasta el punto nos indican el año y los últimos tres el més, para saberlo concretamente solamente tendríamos que dividir estas tres últimas cifras por 83.33 por ejemplo 2012.917 correspondería a noviembre del 2012 ya que 917/83.33 es aproximadamente 11, solo hay que tener cuidad con que 2013.000 corresponde a diciembre de 2012.
+Si le echamos un vistazo rápido vemos que el rango de valores[^1] que toma es bastante corto, yendo solamente desde Agosto 2012 hasta Julio de 2013
+
+[^1]: Nótese que cuando hablamos de rango valores, nos referimos a los que toman en la muestra de nuestro dataset, no al dominio de cada una de las variables
+
+- $X_2$ - **Edad de la casa** : medida en años de antigüedad, toma valores desde el 0 es decir una casa nueva hasta el 43.8 es decir una casa con casi 44 años.
+
+- $X_3$ - **Distancia a la estación** de metro más cercana : esta distancia está medida en metros y toma valores desde el 23.38 hasta 6488.021
+
+- $X_4$ - **Numero de tiendas de conveniencia en el barrio a las que se puede llegar andando** : Esta variable toma valores enteros y nos muestra la cantidad de tiendas de conveniencia que hay cerca de la vivienda, toma valores desde 0 hasta 10
+
+- $X_5$ - **Coordenada geográfica, Latitud** : está medida en grados y toma valores desde 24.93207 hasta 25.01459
+
+- $X_6$ - **Coordenada geográfica, Longitud** : está medida en grados y toma valores desde 121.4735 hasta 121.5663
+
+***VARIABLE RESPUESTA***
+
+ Y - **Precio de la vivienda por unidad de área** : expresado en 10000 nuevos dólares taiwaneses/Ping, donde Ping es una unidad local, 1 Ping = 3,3 metros cuadrados
+
+
+# 3.¿Qué es la regresión lineal múltiple ?
+
+## 3.1 Explicación general
+
+El propósito principal de este tipo de regresión es modelar el valor de la variable respuesta(y) através de una relación lineal con una serie de variables explicativas $(X_1,X_2,...,X_k)$ obviamente, suponiendo que existe una relación lineal entre ellas, destacar que los valores que toman las variables explicativas son conocidos, el modelo quedará de la forma
+
+$$
+y = \beta_0 + \beta_1x_1 +\beta_2x_2+...+\beta_kx_k + u
+$$
+
+Y para cada individuo de la muestra será :
+
+$$
+y_i = \beta_0 + \beta_1x_{1i} +\beta_2x_{2i}+...+\beta_kx_{ki} + u_i
+$$
+
+- $y_i$ es el valor de la respuesta del individuo i-esimo
+
+- $\beta_j$ mide el efecto marginal que produce un aumento unitario en $x_j$ cuando el resto de
+variables permanecen constantes (j = 1, 2, . . . , k),
+
+- $u_i$ mide el efecto que producen sobre la respuesta las variables que no están incluidas
+en el modelo. Es el término de error o perturbación
+
+
+## 3.2 Hipótesis básicas del modelo
+
+La mayoría de ellas dependen de la pertubación aleatoria $u_i$ y estas son:
+
+- Esperanza cero: $E(u_i) = 0$
+- Varianza constante: $Var(u_i) = \sigma^2$
+- Independencia dos a dos: $Cov(u_i,u_j) = 0, i \neq j$
+- Siguen una distribución normal
+
+Se suelen resumir estas cuatro primeras hipótesis diciendo que 
+
+$$
+u \sim NM_n(0,\sigma^2 I)
+$$
+
+Dónde u es un vector n x 1 que contiene las pertubaciones aleatorias, 0 es un vector n x 1 de ceros e $I$ es la matrix identidad de n x n.
+
+Además a estas cuatro primeras hipótesis tenemos que añadirle dos más
+
+- El tamaño muestral debe de ser mayor que el número de parámetros a estimar, sino tendríamos infinitas soluciones
+
+- Las variables explicativas deben de ser linealmente independientes, de lo contrario podriamos tener problemas de multicolinealidad llegando a tener infinitas soluciones si una de ellas se puede expresar como combinación lineal del resto.
+
+## 3.3 Modelo en notación matricial
+
+Como resumen a los dos últimos apartados, vamos a representar el modelo en notación matricial, que bajo mi punto de vista es la forma más clara de lo que de verdad representa la regresión linal múltiple
+
+$Y = X\beta + u$ dónde $u \sim NM_n(0,\sigma^2 I)$
+
+$$
+\begin{equation*}
+\left(
+\begin{array}{l}
+y_1  \\
+y_2  \\
+\vdots \\
+y_n
+\end{array}
+\right) = \left(
+\begin{array}{lllll}
+1 & x_{11} & x_{21} & \cdots & x_{k1}  \\
+1 & x_{12} & x_{22} & \cdots & x_{k2} \\
+\vdots & \vdots & \vdots & \ddots & \vdots \\
+1 & x_{1n} & x_{2n} & \cdots & x_{kn}
+\end{array}
+\right) \left(
+\begin{array}{l}
+\beta_0  \\
+\beta_1   \\
+\vdots \\
+\beta_k 
+\end{array}
+\right) +  \left(
+\begin{array}{l}
+u_1  \\
+u_2  \\
+\vdots \\
+u_n
+\end{array}
+\right)
+\end{equation*}
+$$
+
+
+De aquí sacamos que $y \sim NM_n(m,\sigma^2 I)$ dónde m es 
+
+$$
+\begin{equation*}
+m =  \left(
+\begin{array}{c}
+\beta_0 + \beta_1x_{11}+\beta_2x_{21} +\cdots+\beta_kx_{k1}  \\
+\beta_0 + \beta_1x_{12}+\beta_2x_{22} +\cdots+\beta_kx_{k2} \\
+\vdots \\
+\beta_0 + \beta_1x_{1n}+\beta_2x_{2n} +\cdots+\beta_kx_{kn}
+\end{array}
+\right) = X\beta
+\end{equation*}
+$$
+
+Vemos que es otra forma de ver la idea general del modelo, una vez que tenemos una pequeña idea el siguiente paso es ver la forma de estimar las $\beta$ de nuestro modelo para poder conseguir la estimación de la recta de regresión.
+
+## 3.4 Estimación de los parámetros
+
+Queremos encontrar la recta que nos proporcione el mejor ajuste es decir la que minimice el error en la estimación, por tanto y aprovechando que nuestra variable respuesta (y) es normal lo que implica que la estimación por maxima verosimilitud y por mínimos cuadrado coinciden, vamos a minimizar la suma de todos los errores de estimación es decir de los residuos
+
+$$
+M = \sum^n_{i = 1} (y_i - \hat{y_1})^2 = \sum^n_{i =1}(y_i - \beta_0 - \beta_1x_{1i} - \beta_2x_{2i}-\cdots-\beta_kx_{ki})^2
+$$
+
+que al minimizarse (queda fuera de los objetivos de este trabajo) nos lleva a la siguiente igualdad 
+
+$$
+X^ty = X^tX\beta
+$$
+
+de dónde sacamos la estimación del vector de parámetros
+
+$$
+\hat{\beta} = (X^tX)^{-1}X^ty
+$$
+
+Dónde el único problema lo tendremos cuando $det(X^tX) \approx 0$ ya que no existirá la inversa y tendremos dificultades para estimar $\hat{\beta}$ y su varianza
+
+## 3.5 Estimación del modelo y hat matrix
+
+Haciendo uso de lo calculado en el apartado anterior podemos llegar a la estimación de nuestro modelo
+
+$$
+\hat{y} = X\hat{\beta}
+$$
+dónde
+
+$$
+\hat{\beta} = (X^tX)^{-1}X^ty
+$$
+
+
+
+Si sustituimos llegamos a 
+
+$$
+\hat{y} = X(X^tX)^{-1}X^ty = Hy
+$$
+
+dónde H es la Hat Matrix o proyector ortogonal $H =  X(X^tX)^{-1}X^t$ la cual es simétrica e idenmpotente con rango k + 1
+
+## 3.6 Residuos del modelo
+
+Estos son de la forma
+
+$$
+e = y - \hat{y} = y-Hy = (I-H)y
+$$
+
+Donde tenemos que (I-H) es el proyector ortogonal complementario y es también una matriz simétrica,idempotente y en este caso de rango n-k-1.
+
+El proyector I-H define un espacio ortogonal al definido anteriormente por el proyector H. Por tanto el producto escalar entre elementos de ambos va a ser cero en particular $\hat{y}^te = 0$
+
+
+## 3.7 Creación del modelo de regresión lineal múltiple en R
+
+Ya tenemos los datos cargados del apartado anterior, de cara a facilitar la sintaxis del código, vamos a renombrar las variables
+
+```{r}
+datos <- dplyr::rename(datos, X1 = "X1 transaction date", X2 =  "X2 house age", X3 = "X3 distance to the nearest MRT station", X4 = "X4 number of convenience stores", X5 = "X5 latitude", X6 = "X6 longitude", Y ="Y house price of unit area")
+```
+
+Ahora vamos a crear el modelo haciendo uso de la función lm() que tiene R
+
+```{r}
+modelo <- datos %>%
+  lm(formula = Y ~ X1+X2+X3+X4+X5+X6)
+
+summary(modelo)
+```
+
+Si queremos ver justo la estimación de los coeficientes
+
+```{r}
+coefficients(modelo)
+```
+
+Con lo que llegamos a una estimación de la recta de regresión de la forma
+
+```{r}
+extract_eq(modelo,use_coefs = TRUE)
+```
+
+También lo podríamos haber calculado haciendo uso de las fórmulas comentadas anteriormente es decir con
+
+$$
+\hat{\beta} = (X^TX)^{-1} * X^Ty
+$$
+
+Vamos a calcularlo de esa forma y a comprobar que sale lo mismo
+
+```{r}
+X <- as.matrix(select(.data = datos, c(X1,X2,X3,X4,X5,X6)))
+X <- cbind(rep(1,dim(datos)[1]),X)
+y <- as.matrix(select(datos, Y))
+XtX <- t(X) %*% X
+Xty <- t(X) %*% y
+invXtX <- solve(XtX)
+betas <- round(solve(XtX) %*% Xty , 4)
+kable(betas)
+```
+
+Que si los comparamos con los obtenidos con la función lm()
+
+```{r}
+kable(round(coefficients(modelo),4))
+```
+
+
+
+
+Vemos que como era de esperar coinciden por lo que ambos métodos son validos.
+
+
+## 3.8 Valores predichos
+
+Vamos ahora a ver qué valores de la variable respuesta Y ha predicho nuestro modelo, si el modelo es bueno, estos se deben de ajustar bastante bien a los de la variable respuesta con los que lo hemos entrenado.
+
+La salida del siguiente código nos devolverá el valor de Y de las 414 observaciones de nuestros datos originales, junto con la predicción para cada observación, viendo cuánto se alejan los datos del valor real podemos ver más o menos cómo de bien funciona nuestro modelo, pero obviamente no ser puede sacar ninguna conclusión.
+
+
+```{r}
+predicciones <- mutate(datos, predicciones = fitted.values(modelo))
+predicciones %>%
+  select(Y,predicciones)
+
+```
+
+
+## 3.9 Residuos del modelo
+
+Calculamos las diferencias entre los valores observados de la variable respuesta Y y
+los valores predichos (estimados) por el modelo, para cada una de las observaciones de
+las variables explicativas con las que el modelo se ha entrenado. Es decir, calculamos los
+residuos del modelo
+
+Le añadimos a la salida del anterior apartado la columna de los residuos, que no es más que restar la primera columna con la segunda
+
+```{r}
+predicciones <- predicciones %>% mutate(residuos = residuals(modelo))
+
+predicciones %>%
+  select(Y,predicciones,residuos)
+```
+
+destacar que para que el modelo se pueda usar, habría que validar que se cumplen las hipótesis iniciales del mismo, aunque luego las estudiaremos más a fondo, vamos a hacer un pequeño estudio de los residuos obtenidos.
+
+Vamos a empezar contrastando su normalidad
+
+```{r}
+residuos <- predicciones$residuos 
+qqnorm(residuos)
+qqline(residuos, col = "Red")
+```
+
+Vemos que aunque el ajuste no es perfecto sobretodo en los extremos, con valores que se alejan bastante de la recta, por lo que habría que revisar cuales son, por lo demás el ajuste es bastante bueno.
+
+
+Por último estudiamos la homocedasticidad de los residuos mediante el contraste de Breusch-Pagan.
+
+
+```{r}
+bptest(modelo)  # Realiza el contraste de Breusch-Pagan.
+```
+
+Obtenemos un p-value de 0.2058, superior al nivel de significación 0.05 habitual, por lo que no rechazamos la hipótesis nula de homocedasticidad.
+
+
+Vamos a pasar al siguiente punto de teoría antes de seguir con el estudio en R.
+
+
+# 4.Propiedades de los estimadores
+
+## 4.1 Propiedades de las estimaciones de los betas
+
+Sabemos que bajo las hipótesis del modelo se cumple que los estimadores
+
+$$
+\beta_j \sim N(\beta_j,\sigma^2q_{jj})
+$$
+
+dónde los $q_{jj}$ vienen de $diag((X^tX)^{-1})$ siendo $q_{jj}$ el elemento en la posición j + 1, ya que hay que tener en cuenta la columna correspondiente al intercepto.
+
+
+## 4.2 Propiedades de la estimación de la varianza residual
+
+El estimador por máxima verosimilitud para la varianza de la perturbación aleatoria $\sigma^2$ es la varianza residual que se define de la siguiente forma
+
+$$
+
+s^2_R = \frac{1}{n-k-1}\sum^n_{i = 1} e^2_i = \frac{1}{n-k-1} e^t e
+$$
+
+o de forma alternativa también se puede expresar como
+
+$$
+s^2_R = \frac{y^ty - \hat{\beta}^tX^ty}{n-k-1}
+$$
+
+de la que sabemos que bajo las hipótesis del modelo se cumple que
+
+$$
+\frac{n-k-1}{\sigma^2}s^2_R \sim \chi^2_{n-k-1}
+$$
+$$
+E(s^2_R) = \sigma^2
+$$
+
+$$
+Var(s^2_R) = \frac{2\sigma^4}{n-k-1}
+$$
+
+## 4.3 Calculo de las varianzas de los estimadores y del modelo con R
+
+Vamos a calcular estos dos últimos apartados con R
+
+```{r}
+betas <- summary(modelo)$coefficient
+betas <- as.data.frame(betas)
+round((betas$`Std. Error`)^2,3)
+```
+
+Es decir
+
+
+$$
+\widehat{Var(\widehat{\beta_0)}} = 45905856.770
+$$
+
+$$
+\widehat{Var(\widehat{\beta_1)}} = 2.424
+$$
+
+$$
+\widehat{Var(\widehat{\beta_2)}} = 0.001
+$$
+
+$$
+\widehat{Var(\widehat{\beta_3)}} = 0.000
+$$
+
+$$
+\widehat{Var(\widehat{\beta_4)}} = 0.035
+$$
+
+$$
+\widehat{Var(\widehat{\beta_5)}} = 1986.108
+$$
+
+$$
+\widehat{Var(\widehat{\beta_6)}} = 2360.130
+$$
+
+Además también vamos a calcular la varianza del modelo, que en la práctica es la más útil
+
+```{r}
+resumen <- summary(modelo)
+(resumen$sigma)^2
+```
+
+que también la podríamos haber calculado con la fórmula teórica
+
+$$
+s^2_R = \frac{Y^tY - \hat{\beta}^tX^tY}{n-k-1}
+$$
+
+```{r}
+n <- 414
+k <- 6
+yty <- t(y) %*% y
+betas <- solve(XtX) %*% Xty
+(s2r <- (yty - (t(betas)%*%Xty))/(n-k-1))
+```
+
+Por tanto tenemos que 
+
+$$
+s^2_R =  78.45559
+$$
+
+Ahora vamos a pasar al siguiente punto de teoría, concretamente pasamos al tema de predicción
+
+# 5. Predicción
+
+## 5.1 Estimación de la media de la variable respuesta condicionada a nuevas observaciones de las variables explicativas
+
+El estimador puntual de la media condicionada a la obervación h es decir para $m_h$ es:
+
+$$
+\hat{y}_h = X^t\hat{\beta} \sim N(m_h,\sigma^2v_{hh})
+$$
+dónde 
+
+$$
+v_{hh} = x_h^t(X^tX)^{-1}x_h
+$$
+
+de dónde mediante el método de la cantidad pivotal y recordando que no conocemos $\sigma^2$ pero la estimamos con $s^2_R$, podemos sacar un intervalo de confianza para $m_h$ al $(1-\alpha)100\%$ de la forma:
+
+$$
+I.C.(m_h) = \left ( \hat{y_h} \mp t_{1-\alpha/2} * \frac{s_R}{\sqrt{\hat{n_h}}} \right )
+$$
+
+dónde $t_{1-\alpha/2}$ es el percentil $(1-\alpha/2)100$ de la ley t de student con n-k-1 grados de libertad y $\hat{n_h} = \frac{1}{v_{hh}}$ además definimos este último cómo el número equivalente de observaciones, es decir la cantidad de observaciones de nuestra muestra usadas para realizar la estimación por lo que cuanto mayor sea este número mejor será la estimación.
+
+
+## 5.2 Estimación de la variable respuesta condicionada a nuevas observaciones de las variables explicativas
+
+Sabemos que
+
+$$
+e_h = y_h - \hat{y_h} \sim N\left(0,\sigma^2\left(1+\frac{1}{\hat{n_h}}\right)\right)
+$$
+
+de aquí podemos sacar el intervalo de predicción para la respuesta concreta $y_h$:
+
+$$
+IVP_{y_h} \left[ \hat{y_h} \mp t_{n-k-1}^{1-\alpha/2} * \sqrt{s^2_R \left (1 + v_{hh} \right)} \right]
+$$
+
+## 5.3 Intervalos para la media y para la observación futura en RStudio
+
+
+### 5.3.1 IC para la media de la variable respuesta condicionada a nuevas observaciones de las variables explicativas
+
+Vamos a crear una función que mediante un modelo y una nueva observación nos devuelva los límites del intervalo y el valor predicho
+
+
+```{r}
+IC_MEDIA_VARIABLE_RESPUESTA <- function(datos,modelo,xh,alpha){
+  
+  #Datos tiene que ser un data.frame que contenga solamente las variables explicativas y a la variable respuesta llamada Y
+  #Modelo debe ser un objeto que contenga la respuesta de la funcion lm() con el modelo deseado
+  #xh es la nueva observacion con un 1 al principio
+  #alpha es el nivel de significacion que queremos
+  
+  n <- dim(datos)[1] #numero de observaciones
+  k <- length(coefficients(modelo)) - 1  #Cantidad de variables explicativas  
+  t <- qt(p = alpha/2, df = n-k-1 , lower.tail = F) 
+  
+  #Calculo de y_h
+  
+  betas <- as.data.frame(summary(modelo)$coefficient)
+  y_h <- xh %*% betas$Estimate
+  
+  #Calculo de la varianza residual
+  
+  resumen <- summary(modelo)
+  s2r <- (resumen$sigma)^2
+  
+  #Calculo de n_h
+  
+  X <- as.matrix(select(.data = datos, c(-Y)))
+  
+  X <- cbind(rep(1,dim(datos)[1]),X)
+  v_hh <- t(xh) %*% solve(t(X)%*%X) %*% xh
+  n_hh <- 1/v_hh
+  
+  #Creacion del intervalo
+  
+   inferior <-y_h - t * sqrt(s2r * 1/n_hh)
+   superior <-y_h + t * sqrt(s2r * 1/n_hh)
+  
+   #Lo devolvemos 
+   cat("El intervalo de confianza para un nivel de significación ",alpha, " es [",round(inferior,4),";",round(superior,4),"] con una estimación puntual de la media de ",round(y_h,4))
+}
+```
+
+
+En este caso hemos usado todos los datos que tenemos para entrenar el modelo, pero vamos a escoger una  observación cualquiera para ver cómo funcionaría la función
+
+```{r}
+xh1 <- as.numeric(c(1,datos[49,c(1:6)]))
+
+IC_MEDIA_VARIABLE_RESPUESTA(datos = datos,modelo = modelo,xh = xh1,alpha = 0.05)
+```
+
+### 5.3.2 Intervalo de valores probables para variable respuesta condicionada a nuevas observaciones de las variables explicativas
+
+
+Vamos a crear una función análoga a la del apartado anterior pero para este tipo de intervalo
+
+```{r}
+IVP_VARIABLE_RESPUESTA <- function(datos,modelo,xh,alpha){
+  
+  #Datos tiene que ser un data.frame que contenga solamente las variables explicativas y a la variable respuesta llamada Y
+  #Modelo debe ser un objeto que contenga la respuesta de la funcion lm() con el modelo deseado
+  #xh es la nueva observacion con un 1 al principio
+  #alpha es el nivel de significacion que queremos
+  
+  n <- dim(datos)[1] #numero de observaciones
+  k <- length(coefficients(modelo)) - 1  #Cantidad de variables explicativas  
+  t <- qt(p = alpha/2, df = n-k-1 , lower.tail = F) 
+  
+  #Calculo de y_h
+  
+  betas <- as.data.frame(summary(modelo)$coefficient)
+  y_h <- xh %*% betas$Estimate
+  
+  #Calculo de la varianza residual
+  
+  resumen <- summary(modelo)
+  s2r <- (resumen$sigma)^2
+  
+  #Calculo de n_h
+  
+  X <- as.matrix(select(.data = datos, c(-Y)))
+  
+  X <- cbind(rep(1,dim(datos)[1]),X)
+  v_hh <- t(xh) %*% solve(t(X)%*%X) %*% xh
+  n_hh <- 1/v_hh
+  
+  #Creacion del intervalo
+  
+    inferior <- y_h - t * sqrt(s2r *(1 + 1/n_hh))
+    superior <- y_h + t * sqrt(s2r *(1 + 1/n_hh))
+  
+   #Lo devolvemos 
+   cat("El intervalo de valores probables para el valor de la variable respuesta condicionada a una nueva observación para un nivel de significación ",alpha, " es [",round(inferior,4),";",round(superior,4),"] con una estimación puntual de la variable respuesta de ",round(y_h,4))
+}
+
+```
+
+Vamos a usar el mismo ejemplo que en el apartado anterior, para así poder comparar ambos intervalos
+
+```{r}
+IVP_VARIABLE_RESPUESTA(datos = datos,modelo = modelo,xh = xh1,alpha = 0.05)
+```
+
+Vemos que el primer intervalo era [ 9.9281 ; 15.3288 ] y este ultimo [ -4.9919 ; 30.2488 ] (vemos que toma un valor negativo que para este tipo de estimación no tendría sentido, por lo que habría que acotarlo en 0) 
+
+Observamos que el intervalo de valores probables es más amplio que el intervalo de confianza para la media, pero ambos están centrados en el mismo valor.
+
+```{r}
+datos[49,7]
+```
+Vemos que en este caso ambos intervalos contienen el verdadero valor de la variable respuesta, aunque esto no tendría porque ser así.
+
+Pasemos al siguiente punto de teoría el cual es muy importante y tendríamos que haberlo tenido en cuenta a la hora de realizar las estimaciones anteriores
+
+# 6.Extrapolación oculta
+
+## 6.1 ¿Qué es la extrapolación oculta?
+
+Se conoce como extrapolacion oculta al hecho de realizar estimaciones de mh o yh para puntos xh que estan fuera del casco convexo de las variables regresoras, este es el menor conjunto convexo que contiene a los n puntos originales
+
+En general, cuando el numero de variables regresoras es k>2 el casco convexo es dificil de calcular.
+
+Pero el siguiente elipsoide contiene al casco convexo:
+
+$$
+x \in \mathbb{R}^{k+1} \propto x_h^t(X^TX)^{-1}x_h  \leq v_{max}
+$$
+
+donde $v_{max} = max(diag(H))$
+
+Destacar que este no es el menor de los elipsoides que contienen al casco convexo, pero si es el más fácil de calcular.
+
+
+## 6.2 Comprobación extrapolación oculta en R
+
+Lo ideal, sería añadir este código a las funciones de los apartados anteriores y que no se cargen en caso de cometer extrapolacion oculta , pero de cara a dejar la independencia entre secciones, vamos a crear una función que nos devuelva si se comete o no extrapolacion oculta
+
+```{r}
+Extrapolacion_oculta <- function(datos,xh){
+  
+  #Calculo de v_hh
+  X <- as.matrix(select(.data = datos, c(-Y)))
+  X <- cbind(rep(1,dim(datos)[1]),X)
+  v_hh <- t(xh) %*% solve(t(X)%*%X) %*% xh
+  
+  #calculo de H
+  H <- X %*% solve(t(X)%*%X) %*% t(X)
+  v_max <- max(diag(H))
+  if((v_hh >= v_max) ==  TRUE){
+    print("¡CUIDADO! Se comete extrapolación oculta")
+  }else{
+  print("No hay peligro de extrapolacion oculta")}
+}
+```
+
+
+```{r}
+Extrapolacion_oculta(datos = datos,xh = xh1)
+```
+
+Vemos que las estimaciones anteriores son correctas, algo que tiene sentido ya que la propia observación la sacamos de la muestra.
+
+Pasamos ahora al siguiente punto de teoría
+
+# 7.Inferencia del modelo de regresión lineal
+
+## 7.1 Intervalos de confianza para los betas
+
+Los vamos a construir con el método de la cantidad pivotal, usando como referencia el siguiente estadístico:
+
+$$
+\hat{\beta_j} \sim N(\beta_j,\sigma^2 q_{jj}) \rightarrow \frac{\hat{\beta_j} - \beta_j}{\sqrt{s^2_R *q_{jj}}} \sim t_{n-k-1}
+$$
+de dónde conseguimos un intervalo de la forma 
+
+$$
+I.C.(\beta_j) = \left ( \hat{\beta_j} \mp t_{1-\alpha/2}^{n-k-1} * s_R \sqrt{q_{jj}} \right )
+$$
+
+## 7.2 Contrastes individuales para los betas
+
+Los contrastes que se pueden plantear son:
+
+***Bilateral***
+
+$$
+H_0 : \beta_j = \beta_j^*
+$$
+$$
+H_1 : \beta_j \neq \beta_j^*
+$$
+
+***Unilateral Izquierdo***
+
+$$
+H_0 : \beta_j \leq \beta_j^*
+$$
+
+$$
+H_1 : \beta_j > \beta_j^*
+$$
+
+
+***Unilateral Derecho***
+
+$$
+H_0 : \beta_j \geq \beta_j^*
+$$
+
+$$
+H_1 : \beta_j < \beta_j^*
+$$
+
+
+Con un estadístico de contraste que es de la forma:
+
+$$
+t_{exp} =  \frac{\hat{\beta_j} - \beta_j}{\sqrt{s^2_R *q_{jj}}} \sim t_{n-k-1}
+$$
+En nuestro caso nos interesa el contraste de significación de cada beta, que es el caso particular dónde el contraste es bilateral y el valor de $\beta_j^*$ es 0, en el cual si no rechazamos $H_0$ implica que el $\beta_j$ no es significativo y por tanto la variable explicativa $X_j$ no va a tener relación lineal con la variable respuesta Y.
+
+
+## 7.3 Inferencia sobre los betas en RStudio
+
+Vamos a aplicar los dos últimos apartados a nuestros dataset.
+
+Empezamos con los intervalos de confianza al 95% de confianza
+
+```{r}
+round(confint(modelo),4)
+```
+
+$$
+IC(\beta_0):(-27761.1027,-1122.8628)
+$$
+$$
+IC(\beta_1):(2.0885,8.2095)
+$$
+$$
+IC(\beta_2):(-0.3454,-0.1940)
+$$
+$$
+IC(\beta_3):(-0.0059,-0.0031)
+$$
+$$
+IC(\beta_4):(0.7634,1.5032)
+$$
+$$
+IC(\beta_5):(137.8623,313.0780)
+$$
+$$
+IC(\beta_6):(-107.9304,83.0723)
+$$
+
+Lo más interesante es que el 0 solo está incluido en el último intervalo, no obstante hay varios muy cercanos a 0, vamos ahora con los contrastes de significación individuales
+
+Empezamos con el $\beta_0$
+
+$$
+H_0 : \beta_0 = 0
+$$
+$$
+H_1 : \beta_0 \neq 0
+$$
+El valor de nuestro estadístico de contraste es
+
+```{r}
+Estadisticos <- select(as.data.frame(resumen$coefficients),"t value")
+(texp <- Estadisticos[1,1])
+```
+
+$t_{exp} = -2.131536$
+
+Además vamos a calcular la región de rechazo para $\alpha = 0.05$
+
+$$
+RC((-\infty,-t_{n-k-1}^{\alpha/2})\cup(t_{n-k-1}^{\alpha/2},+\infty))
+$$
+
+```{r}
+(talfa <- qt(p = 0.025, df = n-k-1, lower.tail = FALSE))
+ifelse(abs(texp) >= talfa, yes = "Es significativo para alpha 0.05",no = "No es significativo para alpha 0.05")
+```
+
+Por tanto la region de rechazo es $(-\infty,-1.96581) \cup(1.96581,+\infty)$ y como nuestro estádistico de contraste está dentro, podemos rechazar $H_0$ y aceptar $H_1$ para un $\alpha = 0.05$ nuestro $\beta_0$ es significativo.
+
+Vamos a además resolver el contraste por el criterio del p-value para así poder comparar la significación del modelo para cualquier valor de $\alpha$
+
+Conseguimos el p-value de la siguiente forma
+
+```{r}
+pvalores <- select(as.data.frame(resumen$coefficients),"Pr(>|t|)")
+(pvalor <- pvalores[1,1])
+```
+
+Vemos que para $\alpha = 0.05,0.1$ rechazamos $H_0$ pero para el caso en el que $\alpha = 0.01$ no se podría rechazar $H_0$
+
+Hemos visto un ejemplo de contraste completo, ahora vamos a crear una función que nos los calcule todos para no tener que ir haciendo uno a uno a mano
+
+```{r}
+significacion_individual <- function(modelo,alpha){
+  
+  resumen <- summary(modelo)
+  pvalores <- select(as.data.frame(resumen$coefficients),"Pr(>|t|)")
+  significativo <- rep(0,dim(pvalores)[1])
+  resultado <- data.frame(row.names(pvalores),pvalores,significativo)
+  
+  for(i in 1:dim(pvalores)[1]){
+    if(pvalores[i,1] >= alpha){
+      resultado[i,3] = "NO"
+    }else{
+      resultado[i,3] = "SI"
+    }
+  }
+  return(kable(resultado[,-1]))
+}
+```
+
+Vamos a ver el resultado para los $\alpha$ habituales es decir 0.01,0.05 y 0.1, pero serviría para cualquiera
+
+```{r}
+significacion_individual(modelo = modelo,alpha = 0.01)
+```
+
+```{r}
+significacion_individual(modelo = modelo,alpha = 0.05)
+```
+
+```{r}
+significacion_individual(modelo = modelo,alpha = 0.1)
+```
+
+Por tanto vemos que la única variable que no es significativa para los $\alpha$ habituales es $X_6$ es decir la coordenada geográfica Longitud.
+
+
+Vamos ahora a estudiar la significación global del modelo.
+
+# 8. Contraste de significación global del modelo (ANOVA)
+
+## 8.1 Descripción contraste ANOVA
+
+Este contraste es de la forma
+
+$$
+H_0 : \beta_1 = \beta_2 = ... = \beta_k = 0
+$$
+
+
+$$
+H_1: \exists j \propto \beta_j \neq 0 ; j = 1,...,k
+$$
+Siendo k el número de variables explicativas de nuestro modelo.
+
+Si $H_0$ fuera cierta, el modelo quedaría $y_i = \beta_0 + u_i$, lo que implicaría que
+fueran cuales fueran los valores de las $x_j$ , el valor de la variable respuesta y sería un valor
+constante $\beta_0$. Esto significa que, tomadas de forma conjunta, las variables
+independientes no tienen ninguna influencia (lineal) sobre la variable respuesta.
+
+Este contraste lo resolvemos a través de la tabla ANOVA
+
+***Descomposición de la variabilidad***
+
+La relación fundamental de la regresión, nos asegura que la variabilidad total de y puede expresarse como
+
+$$
+VT = VE + VNE
+$$
+O lo que es lo mismo
+
+$$
+\sum^n_{i = 1}(y_i - \bar{y})^2 = \sum^n_{i = 1 }(\hat{y_i}- \bar{y})^2+\sum^n_{i = 1}(y_i - \hat{y_i})
+$$
+Que para nuestro caso de regresión lineal múltiple
+
+$$
+VT = y^ty - n\bar{y}^2
+$$
+$$
+VE = \beta^tX^ty - n\bar{y}^2
+$$
+
+$$
+VNE = y^ty -  \beta^tX^ty 
+$$
+
+El estadístico de contraste es
+
+$$
+F_{exp} = \frac{\frac{VE/\sigma^2}{k}}{\frac{VNE/\sigma^2}{n-k-1}} = \frac{VE}{ks^2_R} \sim F_{k,n-k-1}
+$$
+
+Destacar que sigue una F de Fisher al ser el cociente de dos $\chi^2$ independientes, cada una dividida entre sus grados de libertad.
+
+## 8.2 Contraste ANOVA en R
+
+```{r}
+resumen$fstatistic
+```
+
+Vemos que el valor de nuestro estadístico es 94.59 y que viene de una F con 6 y 407 grados de libertad respectivamente al cual le corresponde un p-value de 
+
+```{r}
+round(pf(q = resumen$fstatistic[1],df1 = resumen$fstatistic[2],df2 = resumen$fstatistic[3],lower.tail = FALSE),5)
+```
+
+Por tanto rechazaríamos $H_0$ para cualquier valor de $\alpha$ por tanto nuestro modelo es significativo para cualquier nivel de significación.
+
+# 9.Coeficientes de determinacion
+
+## 9.1 Coeficiente de determinación R^2
+
+Este se define como
+
+$$
+R^2 = \frac{VE}{VT} 
+$$
+
+***Inconvenientes***
+
+- $R^2$ aumenta siempre cuando se aumenta el numero de variables explicativas, aunque estas no sean significativos. Por lo que siempre puede aumentarse artificialmente el valor de $R^2$ añadiendo nuevas variables.
+
+- Es posible estimar dos modelos formalmente identicos y con la misma capacidad predictiva pero que conducen a valores distintos de $R^2$
+
+
+Para resolver estos inconvenientes, usamos
+
+## 9.2 Coefiente de determinación ajustado
+
+Este se define como
+
+$$
+\tilde{R^2} = 1 - \frac{VNE/(n-k-1)}{VT/(n-1)}
+$$
+
+El cual se utiliza para comparar la eficacia de modelos de regresión distintos, considerándose mejor aquel con mayor $\tilde{R^2} $
+
+## 9.3 Calculo en R de los coeficientes de determinación
+
+
+Empezamos con el coeficiente de determinación
+
+```{r}
+resumen$r.squared
+```
+
+Vemos que tenemos un valor de $R^2 = 0.5824$ un valor bastante bajo, que nos indica que nuestro modelo solo explica el 58.24% de la variabilidad de la variable respuesta, habría que considerar añadir nuevas variables más explicativas o eliminar alguna que no lo sea.
+
+Vamos ahora con el ajustado
+
+```{r}
+resumen$adj.r.squared
+```
+
+Vemos que tenemos un valor de $\tilde{R^2} = 0.5762$, al igual que el anterior bastante bajo.
+
+\newpage
+
+# 10.Multicolinealidad
+
+El problema de multicolinealidad aparece cuando las variables explicativas son linealmente dependientes, es decir, hay por lo menos un vector columna de la matriz X que es combinacion lineal del resto de columnas.
+
+## 10.1 Tipos de multicolinealidad
+
+***Multicolinealidad perfecta:***
+
+Una de las variables explicativas es combinación lineal exacta de las demás esto implica que
+
+$$
+rang(X) < k + 1 
+$$
+y por tanto el determinante de $X^tX = 0$ lo que hace que no exista su inversa y por tanto no podemos estimar nuestros betas de forma única.
+
+***Alta multicolinealidad***
+
+Alguna o todas las variables explicativas están altamente correladas (pero el coeficiente de correlación no llega a ser exactamente 1 ni -1). En este caso las columnas de X tienen un alto grado de dependencia lineal entre sí, pero aún puede calcularse el vector $\hat{\beta}$ no obstante:
+
+- Las varianzas de los estimadores serán muy altas y por tanto tendremos mucha imprecisión en las estimaciones y a su vez intervalos de confianza muy anchos
+
+- Los estimadores van a ser muy dependientes entre sí al tener altas covarianzas, y no tendremos mucha información sobre lo que ocurre al variar una variable manteniendo las demás constantes.
+
+## 10.2 Identificación de la multicolinealidad
+
+Tenemos tres formas de identificar la multicolinealidad:
+
+1. Matriz de correlaciones entre las variables explicativas
+
+$$
+R =\left(
+\begin{array}{lllll}
+1 & r_{12} & r_{13} & \cdots & r_{1k}  \\
+r_{12} & 1 & r_{23} & \cdots & r_{2k} \\
+\vdots & \vdots & \vdots & \ddots & \vdots \\
+r_{1k} & r_{2k} & r_{3k} & \cdots & 1
+\end{array}
+\right)
+$$
+dónde 
+
+$$
+r_{ij} = \frac{s_{x_i,x_j}}{s_{x_i}s_{x_j}}
+$$
+Si algún $r_{ij}$ es elevado es que hay una alta correlación lineal entre estas dos variables explicativas y por tanto hay un posible problema de multicolinealidad.
+
+2. Estudiando los FIV (Factores de incrementos o de inflación de la varianza)
+
+Estos los encontramos en la diagonal de la inversa de la matriz de correlaciones es decir de
+
+$$
+R^{-1} =\left(
+\begin{array}{lllll}
+\curlyvee_{11} & \curlyvee_{12} & \curlyvee_{13} & \cdots & \curlyvee_{1k}  \\
+\curlyvee_{12} & \curlyvee_{22} & \curlyvee_{23} & \cdots & \curlyvee_{2k} \\
+\vdots & \vdots & \vdots & \ddots & \vdots \\
+\curlyvee_{1k} & \curlyvee_{2k} & \curlyvee_{3k} & \cdots & \curlyvee_{kk}
+\end{array}
+\right) 
+$$
+
+Que si pillamos los elementos de su diagonal
+
+$$
+\curlyvee_{ii} = FIV(i) = \frac{1}{1-R^2_{i.resto}}
+$$
+donde $R^2_{i.resto}$ es el coeficiente de determinación de la regresión de $x_i$ en función de las demás variables explicativas, es decir la proporción de la variabilidad de $x_i$ que explican las demás vairiables.
+
+El criterio de decisión es que si hay algún FIV(i) > 10 tenemos alta multicolinealidad ya que esto significa que su  $R^2_{i.resto}$ es > 90, es decir las demás variables explican más de un 90% de nuestra variable $X_i$
+
+3. Índice de condicionamiento de R
+
+Este se define como
+
+$$
+Cond(R) = \sqrt{\frac{\lambda_k}{\lambda_1}} \geq 1
+$$
+
+dónde $\lambda_k$ es el máximo de los autovalores de la matriz R y $\lambda_1$ el autovalor más pequeña, los criterios de decisón con este método son:
+
+- cond(R) > 30 $\Rightarrow$ alta multicolinealidad
+
+- 10 < cond(R) < 30 $\Rightarrow$ multicolinealidad moderada
+
+- cond(R) < 10 $\Rightarrow$ ausencia de multicolinealidad
+
+
+## 10.3 Tratamiento de la multicolinealidad
+
+Para tratarla, podemos eliminar regresores, reduciendo el número de parámetros a estimar, esto lo podemos hacer de dos formas
+
+- Eliminación de variables de la ecuación. Se puede mejorar (en promedio) el error cuadrático medio de la estimación de los parámetros, si se eliminan aquellas variables con
+
+$$
+|t_{exp}| = \left|\frac{\hat{\beta_j}}{s_R\sqrt{q_{jj}}}\right| < 1 
+$$
+
+
+- En lugar de eliminar directamente variables, se pueden calcular las componentes principales de las variables explicativas y considerar como regresores aquellas componentes que explican mayor porcentaje de la variabilidad (las de mayor autovalor).
+
+
+## 10.4 Estudio de la multicolinealidad en R
+
+Vamos a estudiar si existe algún problema de multicolinealidad en nuestros datos, empezamos con la matriz de correlaciones
+
+```{r}
+R <- cor(select(datos,-Y))
+R
+```
+
+Vemos que hay algún par de variables con el coeficiente de correlación alto, podemos ver $r_{3,4} = -0.6025$, $r_{3,5} = -0.591$, $r_{3,6} = -0.8063$ y algunos aunque algo menores, también un poco elevados, por lo que es posible que tengamos problemas de multicolinealidad en el modelo.
+
+Vamos ahora con los FIV
+
+```{r}
+diag(solve(R))
+```
+
+Vemos que todos son < 10, por lo que no podemos afirmar por este criterio que haya problemas de multicolinealidad.
+
+Vamos ahora con el último método, con el índice de condicionamiento
+
+```{r}
+eigen(R)$values
+```
+
+```{r}
+sqrt(max(eigen(R)$values)/min(eigen(R)$values))
+```
+
+Vemos que el índice de condicionamiento es de 4.22 que es < 10 por lo que hay ausencia de multicolinealidad en nuestro modelo.
+
+# 11.Estudio de los residuos con R
+
+Tras haber estudiado que no hay problemas de multicolinealidad en nuestro modelo, vamos ahora a estudiar los residuos de nuestro modelo
+
+***Estudio de la normalidad***
+
+Los residuos se tiene que distribuir de forma normal, con media igual a 0. Esto se puede comprobar con un histograma, con la distribución de cuantiles (qqnorm() + qqline()) o con un test de hipótesis de normalidad. Los valores extremos suelen ser una causa frecuente por la que se viola la condición de normalidad.
+
+```{r}
+hist(modelo$residuals, col="#00B2EE", cex=1.8, main="Histograma de frecuencias", ylab="Frecuencia")
+qqnorm(modelo$residuals, col="#00B2EE")
+qqline(modelo$residuals)
+boxplot(modelo$residuals, col="#00B2EE", main="Box plot")
+```
+
+Vemos que en el histograma si parece simétrico, no obstante tiene varios valores en los extremos, que pueden afectar a la normalidad, lo mismo se observa en el qq-plot, el ajuste a la línea es bastante bueno, pero al final se empiezan a separar, por lo que eso nos va a indicar ausencia de normalidad, por último vemos que el boxplot está centrado en 0 como debe de ser, pero tiene bastantes outliers, que como bien hemos dicho antes, van a ser la causa por la que nuestros datos van a violar la condición de normalidad, habría que investigar si ha sido fallo al tomar los datos, o es que de verdad no se distribuyen como normal.
+
+Vamos a contrastarla con el Test de Shpiro
+
+```{r}
+shapiro.test(residuos)
+```
+
+Vemos que tenemos un p-value cercano a 0, por lo que podemos rechazar la hipótesis nula de normalidad y diremos que nuestros residuos no siguen una ley normal, por lo que no podríamos usar el modelo debido a que las hipótesis iniciales no se cumplen.
+
+
+***Estudio de la Homocedasticidad***
+
+Empezamos con un análisis gráfico
+
+```{r}
+ggplot(data = datos, aes(X1, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+ggplot(data = datos, aes(X2, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+ggplot(data = datos, aes(X3, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+ggplot(data = datos, aes(X4, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+ggplot(data = datos, aes(X5, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+ggplot(data = datos, aes(X6, modelo$residuals)) +
+    geom_point() + geom_smooth(color = "firebrick") + geom_hline(yintercept = 0) +
+    theme_bw()
+```
+
+Vemos que todos parecen bastante homocedásticos, lo comprobamos mediante el contraste de Breusch-Pagan.
+
+
+```{r}
+bptest(modelo)  # Realiza el contraste de Breusch-Pagan.
+```
+
+Obtenemos un p-value de 0.2058, superior al nivel de significación 0.05 habitual, por lo que no rechazamos la hipótesis nula de homocedasticidad.
+
+Por lo que nuestros residuos sí son homocedasticos.
+
+***Linealidad***
+
+La relación entre variables debe ser lineal. Para comprobarlo se puede recurrir a: Graficar ambas variables a la vez (scatterplot o diagrama de dispersión), superponiendo la recta del modelo generado por regresión lineal. Calcular los residuos para cada observación acorde al modelo generado y graficarlos (scatterplot). Deben distribuirse de forma aleatoria en torno al valor 0.
+
+```{r}
+plot(datos$X1, datos$Y, xlab = "X1: Fecha de venta", ylab = "Precio", cex=2)
+abline(lm(datos$Y~datos$X1), col="red", col.axis=1)
+```
+
+Vemos claramente como no hay ninguna relación lineal, por lo que $X_1$ no parece muy significativa para explicar Y
+
+```{r}
+plot(datos$X2, datos$Y, xlab = "X2:Edad de la casa", ylab = "Precio", cex=1)
+abline(lm(datos$Y~datos$X2), col="red", col.axis=1)
+```
+Se puede apreciar una pequeña relación lineal decreciente, no obstante vemos que en general es bastante aleatoria la dispersión de los puntos, por lo que $X_2$ es algo significativa para explicar Y
+
+
+```{r}
+plot(datos$X3, datos$Y, xlab = "X3:Distancia al metro", ylab = "Precio", cex=1)
+abline(lm(datos$Y~datos$X3), col="red", col.axis=1)
+```
+
+En este caso sí vemos una clase relación lineal decreciente, por lo que $X_3$ si es significativa para explicar Y
+
+
+```{r}
+plot(datos$X4, datos$Y, xlab = "X4: Numero de tiendas de conveniencia", ylab = "Precio", cex=1)
+abline(lm(datos$Y~datos$X4), col="red", col.axis=1)
+```
+Vemos una pequeña relación lineal creciente, por lo  que $X_4$ si es significativa para explicar Y
+
+
+
+```{r}
+plot(datos$X5, datos$Y, xlab = "X5:Latitud", ylab = "Precio", cex=1)
+abline(lm(datos$Y~datos$X5), col="red", col.axis=1)
+```
+
+Vemos una relación lineal creciente, lo único son algunos puntos que serían influyentes a priori y que habría que estudiarlos, también nos serviría ampliar nuestro rango de valores de $X_5$, o mejor dicho tener más observaciones por esa zona.
+
+```{r}
+plot(datos$X6, datos$Y, xlab = "Año de venta", ylab = "Precio", cex=1)
+abline(lm(datos$Y~datos$X6), col="red", col.axis=1)
+```
+
+Vemos que localmente hay una relación lineal positiva, pero luego parece que empieza una relación lineal negativa, por lo que no parece bastante buena para predecir Y.
+
+***Aleatoriedad e independencia de los residuos***
+
+```{r}
+plot(residuos)
+```
+
+Vemos que no se ve ninguna tendencia clara, solamente dos puntos un poco más apartados del resto.
+
+
+
+# 12.Estudio de la robustez del modelo
+
+Se debe estudiar si las propiedades basicas del modelo son debidas a todo el conjunto de observaciones o solo a un pequeño subconjunto de ellas.
+
+Esto se puede estudiar por dos vias, una a priori (antes de estimar el modelo) y otra a
+posteriori (tras estimar el modelo)
+
+## 12.1 Puntos influyentes a priori o puntos palanca
+
+El efecto palanca (leverage) de una observacion es la capacidad de la observacion para atraer al hiperplano de regresion.
+
+definimos $\bar{v}$ como :
+
+$$
+\bar{v} = \frac{1}{n} \sum^n_{i = 1}v_{ii} = \frac{k+1}{n}
+$$
+
+Entonces si $3\leq k\leq6$, se considera que una observación es potencialmente influyente o punto palanca si
+
+$$
+v_{ii} > \frac{2*(k+1)}{n}
+$$
+
+## 12.2 Puntos influyentes a posteriori, distancia de Cook
+
+Un punto o una observación será influyente si:
+
+- a) Modifica el vector de parámetros estimados,
+- b) Modifica el vector de predicciones,
+- c) Hace que la predicción del punto sea muy buena cuando éste se incluye en el modelo, y muy mala cuando se excluye.
+
+Para medir la influencia de un punto se usa la Distancia de Cook, que se define como:
+
+$$
+D(i) = \frac{r^2_i}{k+1} \frac{v_{ii}}{1-v_{ii}}
+$$
+
+dónde
+
+$$
+r_i = \frac{e_i}{s_R\sqrt{1-v_{ii}}}
+$$
+
+Entonces se dice que una observación es influyente a un nivel $\alpha$ si su distancia de cook D(i) > $F_{k+1,n-k-1}^\alpha$ donde $F_{k+1,n-k-1}^\alpha$ es el percentil (1 - $\alpha$)% de la ley F de Fisher con k+1 y n-k-1 grados de libertad respectivamente.
+
+## 12.3 Estudio de la robustez con R
+
+Empezamos con los puntos palanca, primero necesitamos la matriz H de dónde sacaremos de su diagonal los $v_ii$
+
+```{r}
+H <- X %*% solve(t(X)%*%X) %*% t(X)
+diagH <- diag(H)
+
+```
+
+Ahora calculamos el umbral y miramos cuales son puntos palanca
+
+```{r}
+(umbralvii <- (2*(k+1))/n)
+which(diagH > umbralvii)
+```
+
+Vemos que los puntos 9, 36,117, 170, 185, 188, 229, 250, 256, 308, 345, 348, 360, 392 ,408 son puntos influyentes a priori o puntos palanca.
+
+Vamos ahora con los puntos influyentes a posteriori
+
+```{r}
+Distancia_Cook <-(rstandard(modelo)/(k+1))*(diag(H)/(1-diag(H)))
+head(Distancia_Cook)
+tail(Distancia_Cook)
+```
+
+Una vez que tenemos la distancia de Cook de todos los puntos, vamos a calcular el valor de F
+
+```{r}
+F <- qf(0.05, k+1, n-k-1, lower.tail = FALSE)
+```
+
+Ahora miramos si algún es influyente a posteriori
+
+```{r}
+which(Distancia_Cook > F)
+```
+
+Por tanto vemos que aunque había muchos puntos influyentes a priori, ninguno lo es a posteriori.
+
+# 13.Resumen de lo calculado hasta el momento
+
+Haciendo un pequeño resumen de todo lo que llevamos calculado hasta el momento, tenemos que nuestro modelo es de la forma 
+
+```{r}
+extract_eq(modelo,use_coefs = TRUE)
+```
+```{r}
+round(resumen$coefficients,4)
+```
+
+En el cuál son significativas para $\alpha = 0.05$ todas las variables menos $X_6$
+
+Su tabla ANOVA es
+
+```{r}
+s2r <- resumen$sigma^2
+y <- as.matrix(select(datos,Y))
+yty <- t(y) %*% y
+ymedia <- mean(y)
+
+VNE = (n-k-1)*s2r
+VT = yty - n*(ymedia^2)
+VE = VT - VNE
+Coc_VE = VE/k
+Coc_VNE = VNE/(n-k-1)
+Coc_VT = VT/(n-1)
+Fexp = Coc_VE/Coc_VNE
+
+Fuente <- c("VE","VNE","VT")
+Suma_de_cuadrados <- c(VE,VNE,VT)
+Grados_lib <- c(k,n-k-1,n-1)
+Cocientes <- c(Coc_VE,Coc_VNE,Coc_VT) 
+F_exp <- c(Fexp,0,0)
+tabla <- data.frame(Fuente,Suma_de_cuadrados,Grados_lib,Cocientes,F_exp)
+knitr::kable(tabla)
+```
+
+A la que le corresponde un p-value = 0 por lo que nuestro modelo es significativo para cualquier nivel de significación.
+
+Además en el apartado anterior vimos que no existían problemas de multicolinealidad ya que
+
+```{r}
+kable(diag(solve(R)),col.names = "FIV")
+```
+
+Son todos menores de 10 y además el indice de condicionamiento
+
+```{r}
+sqrt(max(eigen(R)$values)/min(eigen(R)$values))
+```
+
+También es menor que 10.
+
+Teniamos puntos influyentes a priori, pero vimos que ninguno era influyente a posteriori.
+
+El coeficiente de determinación de nuestro modelo es
+
+```{r}
+resumen$r.squared
+```
+
+Y el ajustado
+
+```{r}
+resumen$adj.r.squared
+```
+
+Vemos que ambos son bastante bajos, nuestro modelo no llega ni a explicar el 60% de la variabilidad de la variable respuesta, por lo que habría que replantear la selección de variables, ya que estamos omitiendo algunas que son importantes para explicar la variable respuesta.
+
+Además también vimos que nuestros residuos si eran aleatorios,independientes y homocedásticos pero no normales, por lo que nuestro modelo no cumple las hipótesis iniciales y no se podría utilizar, habría que revisar la forma en la que se han obtenidos los datos.
+
+# 14.Estrategias de selección de variables
+
+## 14.1 Seleción del nuevo modelo mediante el método Stepwise 
+
+### 14.1.1 Regresión Stepwise
+
+La regresión paso a paso (stepwise) es la construcción iterativa paso a paso de un modelo de regresión que implica la selección automática de variables independientes.
+
+El objetivo de la regresión stepwise es, a través de una serie de pruebas (pruebas F, pruebas t) encontrar un conjunto de variables independientes que influyan significativamente en la variable dependiente. Esto se hace a través de la iteración, que es el proceso de llegar a resultados o decisiones pasando por rondas repetidas o ciclos de análisis. 
+
+Stepwise regression se puede lograr probando una variable independiente a la vez e irincluyéndola en el modelo de regresión si es estadísticamente significativa o incluyendo todas las variables independientes potenciales en el modelo y eliminando aquellas que no son estadísticamente significativas. Algunos usan una combinación de ambos métodos y, por lo tanto, existen tres enfoques para la regresión por pasos:
+
+- Forward selection comienza sin variables en el modelo, prueba cada variable a medida que se agrega al modelo, luego mantiene las que se consideran estadísticamente más significativas, repitiendo el proceso hasta que los resultados sean óptimos.
+
+- Backward elimination comienza con un conjunto de variables independientes, eliminando una a la vez, luego probando para ver si la variable eliminada es estadísticamente significativa.
+
+- Bidirectional elimination es una combinación de los dos primeros métodos que prueba qué variables deben incluirse o excluirse.
+
+### 14.1.2 Aplicación del Stepwise en R
+
+***Modelo vacío***
+
+Lo primero que tenemos que hacer es crear un modelo vacío
+
+```{r}
+regvacia<-lm(formula = Y~1, datos)
+summary(regvacia)
+```
+
+Vemos que solo nos aparece el valor del intercepto
+
+***Modelo completo***
+
+Ahora tenemos que crear un modelo con todas la variables
+
+```{r}
+regcompleta<-lm(formula = Y~.,datos)
+summary(regcompleta) 
+```
+
+Tenemos ahora el modelo completo, que es el mismo que llevamos usando todo el trabajo.
+
+***Método Forward***
+
+Finalmente, una vez tenido lo anterior, solo resta decirle al programa que utilice ambas regresiones, y que use el procedimiento Forward para generar el modelo. Es decir, el procedimiento, comienza sin variables en el modelo ”regvacia”, después toma una a una de las variables del objeto ”regcompleta”, y las agrega al modelo, luego mantiene las que se consideran estadísticamente más significativas, repitiendo el proceso hasta tener el modelo solo con las variables estadísticamente significativas.
+
+```{r}
+regforw<-step(regvacia, scope = list(lower=regvacia, upper=regcompleta),direction = "forward")
+
+summary(regforw)
+```
+
+Vemos que llegamos a un modelo que incluye todas nuestras variables regresoras excepto $X_6$ que justamente es la que no era estadísticamente significativa.
+
+El modelo queda de la forma
+
+```{r}
+extract_eq(regforw,use_coefs = TRUE)
+```
+
+
+***Metodo Stepwise***
+
+Basta con cambiar la variable direccion
+
+```{r}
+regstep<-step(regvacia, scope = list(lower=regvacia, upper=regcompleta),direction = "both")
+
+summary(regstep)
+```
+
+Vemos que llegamos al mismo resultado que por el método Forward, por tanto nuestro nuevo modelo es
+
+```{r}
+extract_eq(regstep,use_coefs = TRUE)
+```
+
+que además vemos que tiene un coeficiente de determinación ajustado de 
+
+```{r}
+resumen2 <-summary(regstep)
+resumen2$adj.r.squared
+```
+
+que es superior al de nuestro anterior modelo
+
+```{r}
+resumen$adj.r.squared
+```
+
+No obstante vemos que la diferencia no es muy grande y que el modelo sigue sin explicar bien nuestra variable respuesta, sigue sin llegar ni al 60% de la variabilidad. No obstante nuestro nuevo modelo es mejor que el anterior.
+
+# 15.Generación de un modelo con Bootstrap Forward
+
+## 15.1 ¿Qué es el Bootstrap?
+
+El bootstrap es un mecanismo propio de la estadística y la econometría que se centra en el remuestreo de datos dentro de una muestra aleatoria o al azar. Su principal uso es hallar una aproximación a la distribución de la variable analizada.
+
+Este proceso también es conocido en el argot estadístico como bootstrapping y es fruto dentro de los estudios en el campo del muestreo estadístico por el matemático Bradley Efron a finales de los años 70.
+
+La principal utilidad del empleo del bootstrap es reducir el sesgo dentro de análisis o, en otras palabras, aproximar la varianza gracias a la realización de remuestreos aleatorios de la muestra inicial y no de la población. De este modo, se hace más sencillo la construcción de modelos estadísticos mediante la creación de intervalos de confianza y contrastes de hipótesis.
+
+Aunque pueda parecer una práctica muy compleja a priori, el procedimiento en que se basa el bootstrapping es simplemente la creación de un gran número de muestras reposicionando los datos tomando como referencia una muestra poblacional inicial.
+
+
+## 15.2 Creación del modelo
+
+```{r}
+p_load(bootStepAIC,MASS )           
+
+lmFit <-lm(formula = Y~.,datos)      
+boot.stepAIC(regstep, datos, B = 100, alpha = 0.05, direction = "forward", # Hacer 100 remuestreos 
+             k = 2, verbose = F)
+```
+
+Se genera el mismo modelo, pero este procedimiento es mejor que los anteriores ya que de la muestra, se hace “n” remuestreos, dando mayor validez al modelo generado. Este procedimiento se hizo para generae el modelo, pero “bootstrap” se puede utilizar para calcular los Intervalos de Confianza (I.C.) de los coeficientes de regresión, de la R2, del Error, del coeficiente de correlacion, etc. Es decir, de cualquier estadístico.
+
+Ahora vamos a estudiar de nuevo los residuos, pero en este caso de nuestro nuevo modelo, para ver si en este caso sí se puede usar.
+
+```{r}
+shapiro.test(regstep$residuals)
+```
+
+Vemos que tampoco siguen una distribución normal, por lo que tampoco se podría usar nuestro modelo al incumplir las hipótesis iniciales.
+
+
+# 16.Estrategias de regularización
+
+Las estrategias de regularización incorporan penalizaciones en el ajuste por mínimos cuadrados ordinarios (OLS) con el objetivo de evitar overfitting, reducir varianza, atenuar el efecto de la correlación entre predictores y minimizar la influencia en el modelo de los predictores menos relevantes. Por lo general, aplicando regularización se consigue modelos con mayor poder predictivo (generalización).
+
+Mode de regresion linea Ridge, Lasso o Elastic Net. Son modelos de regresion lineal que se estiman por otros metodos distintos de OLS. Estos métodos fuerzan a que las estimaciones de los coeficientes del modelo tiendan a cero, minimizando así el riesgo de overfitting, reduciendo varianza, atenuado el efecto de la correlación entre predictores y reduciendo la influencia en el modelo de los predictores menos relevantes.
+
+
+## 16.1 Regularización Ridge
+
+### 16.1.1 ¿Qué es la regularización Ridge?
+
+La regularización Ridge penaliza la suma de los coeficientes elevados al cuadrado $\sum_{j=i}^k \beta_j^2$ A esta penalización se le conoce como L2 y tiene el efecto de reducir de forma proporcional el valor de todos los coeficientes del modelo pero sin que estos lleguen a cero. El grado de penalización está controlado por el hiperparámetro  $\lambda$ . Cuando  $\lambda = 0$ , la penalización es nula y el resultado es equivalente al de un modelo lineal por mínimos cuadrados ordinarios (OLS). A medida que  $\lambda$  aumenta, mayor es la penalización y menor el valor de los predictores.
+
+
+La principal ventaja de aplicar ridge frente al ajuste por mínimos cuadrados ordinarios (OLS) es la reducción de varianza. Por lo general, en situaciones en las que la relación entre la variable respuesta y los predictores es aproximadamente lineal, las estimaciones por mínimos cuadrados tienen poco bias pero aún pueden sufrir alta varianza (pequeños cambios en los datos de entrenamiento tienen mucho impacto en el modelo resultante). Este problema se acentúa conforme el número de predictores introducido en el modelo se aproxima al número de observaciones de entrenamiento, llegando al punto en que, si  k>n , no es posible ajustar el modelo por mínimos cuadrados ordinarios. Empleando un valor adecuado de  λ , el método de ridge es capaz de reducir varianza sin apenas aumentar el bias, consiguiendo así un menor error total.
+
+La desventaja del método ridge es que, el modelo final, incluye todos los predictores. Esto es así porque, si bien la penalización fuerza a que los coeficientes tiendan a cero, nunca llegan a ser exactamente cero (solo si  λ=∞ ). Este método consigue minimizar la influencia sobre el modelo de los predictores menos relacionados con la variable respuesta pero, en el modelo final, van a seguir apareciendo. Aunque esto no supone un problema para la precisión del modelo, sí lo es para su interpretación.
+
+Por tanto vemos que lo que se busca con este tipo de regresión es minimizar
+
+$$
+\sum_{i = 1}^n(y_i-\beta_0-\sum_{j=1}^k\beta_j x_{ij})^2 + \lambda\sum^k_{j=1}\beta_j^2 = \text{Suma residuos al cuadrado + Penalización Ridge}
+$$
+
+### 16.1.2 Regularización ridge en R
+
+Vamos a usar el paquete glmnet
+
+Ajustamos los modelos de regresión ridge (con la secuencia de valores de  λ por defecto)
+
+```{r}
+fit.ridge <- glmnet(X, y, alpha = 0)
+plot(fit.ridge, xvar = "lambda", label = TRUE)
+```
+
+Ahora vamos a seleccionar el parámetro de penalización  por validación cruzada
+
+```{r}
+cv.ridge <- cv.glmnet(X, y, alpha = 0)
+plot(cv.ridge)
+```
+
+En este caso el parámetro óptimo (según la regla de un error estándar) sería:
+
+```{r}
+cv.ridge$lambda.1se
+```
+
+Al que le corresponden unos coeficientes de
+
+```{r}
+coef(cv.ridge,s = "lambda.1se")
+```
+
+También podríamos haber cogido la menor de las penalizaciones
+
+
+```{r}
+cv.ridge$lambda.min
+```
+
+Al que le corresponden unos coeficientes de
+
+```{r}
+coef(cv.ridge,s = "lambda.min")
+```
+
+## 16.2 Regularización Lasso
+
+### 16.2.1 ¿Qué es la regularización Lasso?
+
+La regularización Lasso penaliza la suma del valor absolutos de los coeficientes de regresión  $\sum_{j=i}^k |\beta_j|$ . A esta penalización se le conoce como l1 y tiene el efecto de forzar a que los coeficientes de los predictores tiendan a cero. Dado que un predictor con coeficiente de regresión cero no influye en el modelo, lasso consigue excluir los predictores menos relevantes. Al igual que en ridge, el grado de penalización está controlado por el hiperparámetro  λ . Cuando  λ=0 , el resultado es equivalente al de un modelo lineal por mínimos cuadrados ordinarios. A medida que  λ  aumenta, mayor es la penalización y más predictores quedan excluidos.
+
+$$
+\sum_{i = 1}^n(y_i-\beta_0-\sum_{j=1}^k\beta_j x_{ij})^2 + \lambda\sum^k_{j=1}|\beta_j| = \text{Suma residuos al cuadrado + Penalización Lasso}
+$$
+
+
+### 16.2.2 Regresión Lasso en R
+
+```{r}
+cv.lasso <- cv.glmnet(X,y)
+plot(cv.lasso)
+```
+
+```{r}
+plot(cv.lasso$glmnet.fit, xvar = "lambda", label = TRUE)    
+abline(v = log(cv.lasso$lambda.1se), lty = 2)
+abline(v = log(cv.lasso$lambda.min), lty = 3)
+```
+
+Usamos el critero OneSe para la selección del $\lambda$
+
+```{r}
+coef(cv.lasso ,s = "lambda.1se")
+```
+
+Vemos que el modelo resultante solo contiene 4 variables explicativas que son $X_2,X_3,X_4,X_5$
+
+Por tanto este método también podría ser empleando para la selección de variables 
+
+
+## 16.3 Comparación Lasso y Ridge
+
+La principal diferencia práctica entre lasso y ridge es que el primero consigue que algunos coeficientes sean exactamente cero, por lo que realiza selección de predictores, mientras que el segundo no llega a excluir ninguno. Esto supone una ventaja notable de lasso en escenarios donde no todos los predictores son importantes para el modelo y se desea que los menos influyentes queden excluidos.
+
+Por otro lado, cuando existen predictores altamente correlacionados (linealmente), ridge reduce la influencia de todos ellos a la vez y de forma proporcional, mientras que lasso tiende a seleccionar uno de ellos, dándole todo el peso y excluyendo al resto. En presencia de correlaciones, esta selección varía mucho con pequeñas perturbaciones (cambios en los datos de entrenamiento), por lo que, las soluciones de lasso, son muy inestables si los predictores están altamente correlacionados.
+
+Para conseguir un equilibrio óptimo entre estas dos propiedades, se puede emplear lo que se conoce como penalización elastic net, que combina ambas estrategias.
+
+## 16.4 Elastic Net
+
+### 16.4.1 ¿Qué es Elastic Net?
+
+Elastic net incluye una regularización que combina la penalización l1 y l2 $\alpha \lambda ||\beta||_1 + \frac{1}{2}(1-\alpha)||\beta||_2^2$  . El grado en que influye cada una de las penalizaciones está controlado por el hiperparámetro  $\alpha$ . Su valor está comprendido en el intervalo [0,1]. Cuando  α=0 , se aplica ridge y cuando  α=1  se aplica lasso. La combinación de ambas penalizaciones suele dar lugar a buenos resultados. Una estrategia frecuentemente utilizada es asignarle casi todo el peso a la penalización l1 ( $\alpha$ muy próximo a 1) para conseguir seleccionar predictores y un poco a la l2 para dar cierta estabilidad en el caso de que algunos predictores estén correlacionados.
+
+$$
+\frac{\sum_{i = 1}^n(y_i -\beta_0 - \sum_{j=1}^k \beta_jx_{ij})^2}{2n} + \lambda(\alpha\sum_{j=1}^k|\beta_j| + \frac{1-\alpha}{2}\sum_{j=1}^k\beta_j^2)
+$$
+
+### 16.4.2 Elastic Net en R
+
+```{r}
+caret.glmnet <- train(Y~.,data = datos, method = "glmnet",
+    preProc = c("zv", "center", "scale"),
+    trControl = trainControl(method = "cv", number = 5),
+    tuneLength = 5)
+caret.glmnet
+```
+```{r}
+ggplot(caret.glmnet, highlight = TRUE)
+```
+
+Vemos que el modelo recomendado por Elastic Net es el asociado a alpha = 0.775 y un lambda = 0.1830886
+
+```{r}
+pred <- predict(caret.glmnet, newdata = datos)
+```
+
+# 17.Conclusiones
+
+Nos faltaría evaluar y validar los modelos conseguidos por cada uno de los métodos, no obstante hemos usado todos nuestros datos para generar el modelo, una opción hubiera sido separar nuestra muestra en datos de entrenamiento y con esos crear los modelos y los demás usarlos de test para testerar lo bueno que es nuestro modelo con datos de los que no se han usado para crearlos, de esa forma podríamos comparar todos los modelos conseguidos y decidir cuál va a ser nuestra elección.
+
+Destacar que en la propia información de los datos se comenta que estan divididos en 2/3 de datos de entreamiento y 1/3 en datos de test, por lo que lo correcto habría sido subdividir estos.
+
+Con esta función, nos bastaría con añadir los valores predichos y los observados y nos devolverá algunas métricas interesante de la predicción del modelo, que nos puede servir para comparar unos y otros
+
+```{r}
+Precision_Modelo <- function(pred, obs, na.rm = FALSE, 
+                     tol = sqrt(.Machine$double.eps)) {
+  err <- obs - pred     # Errores
+  if(na.rm) {
+    is.a <- !is.na(err)
+    err <- err[is.a]
+    obs <- obs[is.a]
+  }  
+  perr <- 100*err/pmax(obs, tol)  # Errores porcentuales
+  return(c(
+    me = mean(err),           # Error medio
+    rmse = sqrt(mean(err^2)), # Raíz del error cuadrático medio 
+    mae = mean(abs(err)),     # Error absoluto medio
+    mpe = mean(perr),         # Error porcentual medio
+    mape = mean(abs(perr)),   # Error porcentual absoluto medio
+    r.squared = 1 - sum(err^2)/sum((obs - mean(obs))^2) # Pseudo R-cuadrado
+  ))
+}
+```
+
+
+A lo largo de este trabajo, hemos repasado casi todos los puntos tratados en la asignatura métodos de regresión del grado en Estadística y Empresa impartida por la Dra.Sandra Benitez Peña, además hemos ampliado un poco con algunos métodos de selección de variables y de regularización como Ridge, Lasso o la combinación de ambos.
+
+En general me ha resultado un trabajo muy bonito de realizar y al que me hubiera gustado dedicar algunos días más para seguir profundizando en algunos puntos, no obstante como son fechas de exámenes finales y no tengo demasiado tiempo más para seguir dedicándole, no obstante creo que ha quedado bastante completo y me ha servido para repasar todo y adentrarme aún más en el bonito mundo de la regresión con técnicas un poco más avanzadas que me han resultado muy curiosas y me han despertado aún más las ganas de cursar la siguiente asignatura de regresión y aprendizaje Estadístico.
+
+
+# 18.Bibliografía
+
+- Apuntes realizados por la Dra.Sandra Benitez Peña para la asignatura Metodos
+de Regresion del Grado de Estadistica y Empresa en la UC3M
+
+- Rpubs.com
+
+- Cienciadedatos.net
+
+- https://rubenfcasal.github.io/aprendizaje_estadistico/
+
